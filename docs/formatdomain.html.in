@@ -4013,6 +4013,78 @@ qemu-kvm -net nic,model=? /dev/null
       <code>&lt;model&gt;</code> element is mandatory.
     </p>
 
+    <h4><a name="elementsIvshmem">Ivshmem device</a></h4>
+
+    <p>
+      An ivshmem (i.e. Inter-VM shared memory)  device allows to share a memory
+      region (created on the host via the POSIX shared memory API) between
+      multiple QEMU processes running different guests.
+      For more information, please see the
+      <a href="http://git.qemu.org/?p=qemu.git;a=blob;f=docs/specs/ivshmem_device_spec.txt">
+      ivshmem documentation of qemu</a>.
+    </p>
+
+<pre>
+  ...
+  &lt;devices&gt;
+    &lt;ivshmem use_server='yes' role='master'/&gt;
+      &lt;source file='/tmp/socket-ivshmem0'/&gt;
+      &lt;size unit='M'&gt;32&lt;/size&gt;
+      &lt;msi vectors='32' ioeventfd='on'/&gt;
+    &lt;/ivshmem&gt;
+    &lt;ivshmem use_server='no' role='peer'/&gt;
+      &lt;source file='ivshmem1'/&gt;
+      &lt;size unit='M'&gt;32&lt;/size&gt;
+    &lt;/ivshmem&gt;
+  &lt;/devices&gt;
+  ...</pre>
+
+    <dl>
+      <dt><code>ivshmem</code></dt>
+      <dd>The <code>ivshmem</code> element has a mandatory <code>use_server</code>
+        attribute which takes the value "yes" or "no":
+        <dl>
+          <dt><code>"yes"</code></dt>
+          <dd>
+            Configure the ivshmen device to connect to the ivshmem server via a unix socket.
+          </dd>
+          <dt><code>"no"</code></dt>
+          <dd>
+            Configure the ivshmen device with a shared memory file.
+          </dd>
+        </dl>
+      </dd>
+      <dt><code>role</code></dt>
+      <dd>The <code>role</code> attribute is optional. It takes the value "master" or "peer":
+        <dl>
+          <dt><code>"master"</code></dt>
+          <dd>
+            On migration, the guest will copy the shared memory to the destination host.
+          </dd>
+          <dt><code>"peer"</code></dt>
+          <dd>
+            The device should be detached and then reattached after migration using
+            the PCI hotplug support.
+          </dd>
+        </dl>
+        Note: PCI hotplug is not supported for ivshmem device in libvirt.
+      </dd>
+      <dt><code>size</code></dt>
+      <dd>The optional <code>size</code> element specifies the size of the shared memory file.
+      </dd>
+      <dt><code>source</code></dt>
+      <dd>The <code>source</code> element is mandatory.
+        The <code>file</code> attribute specifies the ivshmem server socket file in server mode.
+        In non server mode, it specifies the shared memory file.
+      </dd>
+      <dt><code>msi</code></dt>
+      <dd>The optional <code>msi</code> element allows to enable MSI interrupts. This option
+        can only be used in server mode. The <code>vectors</code> attribute
+        allows to specify the number of interrupt vectors. The <code>ioeventd</code> attribute
+        allows to enable ioeventfd.
+      </dd>
+    </dl>
+
     <h4><a name="elementsInput">Input devices</a></h4>
 
     <p>

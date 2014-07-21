@@ -204,7 +204,8 @@ VIR_ENUM_IMPL(virDomainDevice, VIR_DOMAIN_DEVICE_LAST,
               "chr",
               "memballoon",
               "nvram",
-              "rng")
+              "rng",
+              "ivshmem")
 
 VIR_ENUM_IMPL(virDomainDeviceAddress, VIR_DOMAIN_DEVICE_ADDRESS_TYPE_LAST,
               "none",
@@ -760,6 +761,15 @@ VIR_ENUM_IMPL(virDomainDiskDiscard, VIR_DOMAIN_DISK_DISCARD_LAST,
               "default",
               "unmap",
               "ignore")
+
+VIR_ENUM_IMPL(virDomainIvshmemServer, VIR_DOMAIN_IVSHMEM_SERVER_LAST,
+              "yes",
+              "no");
+
+VIR_ENUM_IMPL(virDomainIvshmemRole, VIR_DOMAIN_IVSHMEM_ROLE_LAST,
+              "default",
+              "master",
+              "peer");
 
 #define VIR_DOMAIN_XML_WRITE_FLAGS  VIR_DOMAIN_XML_SECURE
 #define VIR_DOMAIN_XML_READ_FLAGS   VIR_DOMAIN_XML_INACTIVE
@@ -1688,6 +1698,17 @@ void virDomainWatchdogDefFree(virDomainWatchdogDefPtr def)
     VIR_FREE(def);
 }
 
+void virDomainIvshmemDefFree(virDomainIvshmemDefPtr def)
+{
+    if (!def)
+        return;
+
+    virDomainDeviceInfoClear(&def->info);
+
+    VIR_FREE(def->file);
+    VIR_FREE(def);
+}
+
 void virDomainVideoDefFree(virDomainVideoDefPtr def)
 {
     if (!def)
@@ -1870,6 +1891,9 @@ void virDomainDeviceDefFree(virDomainDeviceDefPtr def)
         break;
     case VIR_DOMAIN_DEVICE_NVRAM:
         virDomainNVRAMDefFree(def->data.nvram);
+        break;
+    case VIR_DOMAIN_DEVICE_IVSHMEM:
+        virDomainIvshmemDefFree(def->data.ivshmem);
         break;
     case VIR_DOMAIN_DEVICE_LAST:
     case VIR_DOMAIN_DEVICE_NONE:
@@ -2109,6 +2133,10 @@ void virDomainDefFree(virDomainDefPtr def)
     virSysinfoDefFree(def->sysinfo);
 
     virDomainRedirFilterDefFree(def->redirfilter);
+
+    for (i = 0; i < def->nivshmems; i++)
+            virDomainIvshmemDefFree(def->ivshmems[i]);
+    VIR_FREE(def->ivshmems);
 
     if (def->namespaceData && def->ns.free)
         (def->ns.free)(def->namespaceData);
@@ -2544,6 +2572,8 @@ virDomainDeviceGetInfo(virDomainDeviceDefPtr device)
         return &device->data.memballoon->info;
     case VIR_DOMAIN_DEVICE_NVRAM:
         return &device->data.nvram->info;
+    case VIR_DOMAIN_DEVICE_IVSHMEM:
+        return &device->data.ivshmem->info;
     case VIR_DOMAIN_DEVICE_RNG:
         return &device->data.rng->info;
 
@@ -2760,6 +2790,14 @@ virDomainDeviceInfoIterateInternal(virDomainDefPtr def,
             return -1;
     }
 
+    device.type = VIR_DOMAIN_DEVICE_IVSHMEM;
+    for (i = 0; i < def->nivshmems; i++) {
+        device.data.ivshmem = def->ivshmems[i];
+        if (cb(def, &device, &def->ivshmems[i]->info, opaque) < 0)
+            return -1;
+    }
+
+
     /* This switch statement is here to trigger compiler warning when adding
      * a new device type. When you are adding a new field to the switch you
      * also have to add an iteration statement above. Otherwise the switch
@@ -2787,6 +2825,7 @@ virDomainDeviceInfoIterateInternal(virDomainDefPtr def,
     case VIR_DOMAIN_DEVICE_NVRAM:
     case VIR_DOMAIN_DEVICE_LAST:
     case VIR_DOMAIN_DEVICE_RNG:
+    case VIR_DOMAIN_DEVICE_IVSHMEM:
         break;
     }
 
@@ -9288,6 +9327,124 @@ virDomainNVRAMDefParseXML(xmlNodePtr node,
     return NULL;
 }
 
+static virDomainIvshmemDefPtr
+virDomainIvshmemDefParseXML(xmlNodePtr node,
+                            xmlXPathContextPtr ctxt,
+                            unsigned int flags)
+{
+    virDomainIvshmemDefPtr def;
+    char *use_server = NULL;
+    char *role = NULL;
+    char *ioeventfd = NULL;
+    char *vectors = NULL;
+    xmlNodePtr cur;
+    xmlNodePtr save = ctxt->node;
+
+    if (VIR_ALLOC(def) < 0)
+        return NULL;
+
+    use_server = virXMLPropString(node, "use_server");
+    if (use_server !=  NULL) {
+        if ((def->use_server
+             = virDomainIvshmemServerTypeFromString(use_server)) < 0) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                           _("unknown ivshmem use_server tyoe '%s'"), use_server);
+            goto error;
+        }
+    } else {
+        virReportError(VIR_ERR_XML_ERROR,
+                       "%s", _("missing use_server type"));
+        goto error;
+    }
+
+    role = virXMLPropString(node, "role");
+    if (role !=  NULL) {
+        if ((int)(def->role = virDomainIvshmemRoleTypeFromString(role)) < 0) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                           _("unknown ivshmem role type '%s'"), role);
+            goto error;
+        }
+    } else
+        def->role = VIR_DOMAIN_IVSHMEM_ROLE_DEFAULT;
+
+    cur = node->children;
+    while (cur != NULL) {
+        if (cur->type == XML_ELEMENT_NODE) {
+            if (xmlStrEqual(cur->name, BAD_CAST "source")) {
+                    if (!(def->file = virXMLPropString(cur, "file"))) {
+                        virReportError(VIR_ERR_XML_ERROR, "%s",
+                                       _("cannot parse <source> 'file' attribute"));
+                        goto error;
+                    }
+            } else if (xmlStrEqual(cur->name, BAD_CAST "size")) {
+                if (virDomainParseScaledValue("./size[1]", ctxt,
+                                              &def->size, 1,
+                                              ULLONG_MAX, true) < 0) {
+                    virReportError(VIR_ERR_XML_ERROR, "%s",
+                                   _("size parsing failed"));
+                    goto error;
+                }
+            } else if (xmlStrEqual(cur->name, BAD_CAST "msi")) {
+                if (def->use_server != VIR_DOMAIN_IVSHMEM_SERVER_ENABLED) {
+                    virReportError(VIR_ERR_XML_ERROR, "%s",
+                                   _("msi <element> is only supported for server ivshmem"));
+                    goto error;
+                }
+                def->msi.enabled = true;
+                vectors = virXMLPropString(cur, "vectors");
+                ioeventfd = virXMLPropString(cur, "ioeventfd");
+
+                if (vectors &&
+                    virStrToLong_ui(vectors, NULL, 10, &def->msi.vectors) < 0) {
+                    virReportError(VIR_ERR_XML_ERROR,
+                                   _("cannot parse ivshmem vectors attribute '%s'"),
+                                   vectors);
+                    goto error;
+                }
+                if (ioeventfd) {
+                    if ((def->msi.ioeventfd =
+                         virDomainIoEventFdTypeFromString(ioeventfd)) <= 0) {
+                        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                                       _("unknown ivshmem ioeventfd type '%s'"),
+                                       ioeventfd);
+                        goto error;
+                    }
+                }
+            }
+        }
+        cur = cur->next;
+    }
+
+    if (!def->file) {
+        virReportError(VIR_ERR_XML_ERROR, "%s",
+                       _("missing <source> element in ivshmem device"));
+            goto error;
+    }
+
+    /* size should be a power of two */
+    if (def->size & (def->size-1)) {
+        virReportError(VIR_ERR_XML_ERROR, "%s",
+                       _("ivshmem size should be a power of two"));
+      goto error;
+    }
+
+    if (virDomainDeviceInfoParseXML(node, NULL, &def->info, flags) < 0)
+        goto error;
+
+ cleanup:
+    ctxt->node = save;
+    VIR_FREE(use_server);
+    VIR_FREE(role);
+    VIR_FREE(ioeventfd);
+    VIR_FREE(vectors);
+    return def;
+
+ error:
+    virDomainIvshmemDefFree(def);
+    def = NULL;
+    goto cleanup;
+}
+
 static virSysinfoDefPtr
 virSysinfoParseXML(xmlNodePtr node,
                   xmlXPathContextPtr ctxt,
@@ -10142,6 +10299,10 @@ virDomainDeviceDefParse(const char *xmlStr,
         break;
     case VIR_DOMAIN_DEVICE_NVRAM:
         if (!(dev->data.nvram = virDomainNVRAMDefParseXML(node, flags)))
+            goto error;
+        break;
+    case VIR_DOMAIN_DEVICE_IVSHMEM:
+        if (!(dev->data.ivshmem = virDomainIvshmemDefParseXML(node, ctxt, flags)))
             goto error;
         break;
     case VIR_DOMAIN_DEVICE_NONE:
@@ -12858,6 +13019,25 @@ virDomainDefParseXML(xmlDocPtr xml,
         VIR_FREE(nodes);
     }
 
+    /* analysis of the ivshmem devices */
+    if ((n = virXPathNodeSet("./devices/ivshmem", ctxt, &nodes)) < 0) {
+        goto error;
+    }
+    if (n && VIR_ALLOC_N(def->ivshmems, n) < 0)
+        goto error;
+
+    node = ctxt->node;
+    for (i = 0; i < n; i++) {
+        virDomainIvshmemDefPtr ivshmem;
+        ctxt->node = nodes[i];
+        ivshmem = virDomainIvshmemDefParseXML(nodes[i], ctxt, flags);
+        if (!ivshmem)
+            goto error;
+
+        def->ivshmems[def->nivshmems++] = ivshmem;
+    }
+    ctxt->node = node;
+    VIR_FREE(nodes);
 
     /* analysis of the user namespace mapping */
     if ((n = virXPathNodeSet("./idmap/uid", ctxt, &nodes)) < 0)
@@ -16429,6 +16609,55 @@ static int virDomainPanicDefFormat(virBufferPtr buf,
     return 0;
 }
 
+static int virDomainIvshmemDefFormat(virBufferPtr buf,
+                                     virDomainIvshmemDefPtr def,
+                                     unsigned int flags)
+{
+    const char *use_server = virDomainIvshmemServerTypeToString(def->use_server);
+    const char *role = virDomainIvshmemRoleTypeToString(def->role);
+
+    if (!use_server) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("unexpected ivshmem server %d"), def->use_server);
+        return -1;
+    }
+
+    if (!role) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("unexpected ivshmem role %d"), def->role);
+        return -1;
+    }
+
+    virBufferAsprintf(buf, "<ivshmem use_server='%s'", use_server);
+    if (def->role)
+        virBufferAsprintf(buf, " role='%s'", role);
+    virBufferAddLit(buf, ">\n");
+
+    virBufferAdjustIndent(buf, 2);
+    virBufferAsprintf(buf, "<source file='%s'/>\n", def->file);
+    if (def->size)
+        virBufferAsprintf(buf, "<size unit='M'>%llu</size>\n",
+                          def->size  / (1024 * 1024));
+
+    if (def->use_server == VIR_DOMAIN_IVSHMEM_SERVER_ENABLED && def->msi.enabled) {
+            virBufferAddLit(buf, "<msi");
+            if (def->msi.vectors)
+                virBufferAsprintf(buf, " vectors='%u'", def->msi.vectors);
+            if (def->msi.ioeventfd)
+                virBufferAsprintf(buf, " ioeventfd='%s'",
+                                  virDomainIoEventFdTypeToString(def->msi.ioeventfd));
+            virBufferAddLit(buf, "/>\n");
+    }
+
+    if (virDomainDeviceInfoIsSet(&def->info, flags) &&
+        virDomainDeviceInfoFormat(buf, &def->info, flags) < 0)
+        return -1;
+    virBufferAdjustIndent(buf, -2);
+    virBufferAddLit(buf, "</ivshmem>\n");
+
+    return 0;
+}
+
 static int
 virDomainRNGDefFormat(virBufferPtr buf,
                       virDomainRNGDefPtr def,
@@ -17904,6 +18133,10 @@ virDomainDefFormatInternal(virDomainDefPtr def,
         virDomainPanicDefFormat(buf, def->panic) < 0)
         goto error;
 
+    for (n = 0; n < def->nivshmems; n++)
+        if (virDomainIvshmemDefFormat(buf, def->ivshmems[n], flags) < 0)
+            goto error;
+
     virBufferAdjustIndent(buf, -2);
     virBufferAddLit(buf, "</devices>\n");
 
@@ -19266,6 +19499,7 @@ virDomainDeviceDefCopy(virDomainDeviceDefPtr src,
     case VIR_DOMAIN_DEVICE_SMARTCARD:
     case VIR_DOMAIN_DEVICE_MEMBALLOON:
     case VIR_DOMAIN_DEVICE_NVRAM:
+    case VIR_DOMAIN_DEVICE_IVSHMEM:
     case VIR_DOMAIN_DEVICE_LAST:
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Copying definition of '%d' type "

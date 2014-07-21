@@ -136,6 +136,9 @@ typedef virDomainPanicDef *virDomainPanicDefPtr;
 typedef struct _virDomainChrSourceDef virDomainChrSourceDef;
 typedef virDomainChrSourceDef *virDomainChrSourceDefPtr;
 
+typedef struct _virDomainIvshmemDef virDomainIvshmemDef;
+typedef virDomainIvshmemDef *virDomainIvshmemDefPtr;
+
 /* Flags for the 'type' field in virDomainDeviceDef */
 typedef enum {
     VIR_DOMAIN_DEVICE_NONE = 0,
@@ -157,6 +160,7 @@ typedef enum {
     VIR_DOMAIN_DEVICE_MEMBALLOON,
     VIR_DOMAIN_DEVICE_NVRAM,
     VIR_DOMAIN_DEVICE_RNG,
+    VIR_DOMAIN_DEVICE_IVSHMEM,
 
     VIR_DOMAIN_DEVICE_LAST
 } virDomainDeviceType;
@@ -184,6 +188,7 @@ struct _virDomainDeviceDef {
         virDomainMemballoonDefPtr memballoon;
         virDomainNVRAMDefPtr nvram;
         virDomainRNGDefPtr rng;
+        virDomainIvshmemDefPtr ivshmem;
     } data;
 };
 
@@ -589,6 +594,22 @@ typedef enum {
 
     VIR_DOMAIN_DISK_DISCARD_LAST
 } virDomainDiskDiscard;
+
+typedef enum {
+    VIR_DOMAIN_IVSHMEM_SERVER_ENABLED = 0,
+    VIR_DOMAIN_IVSHMEM_SERVER_DISABLED,
+
+    VIR_DOMAIN_IVSHMEM_SERVER_LAST,
+} virDomainIvshmemServer;
+
+
+typedef enum {
+    VIR_DOMAIN_IVSHMEM_ROLE_DEFAULT = 0,
+    VIR_DOMAIN_IVSHMEM_ROLE_MASTER,
+    VIR_DOMAIN_IVSHMEM_ROLE_PEER,
+
+    VIR_DOMAIN_IVSHMEM_ROLE_LAST,
+} virDomainIvshmemRole;
 
 typedef struct _virDomainBlockIoTuneInfo virDomainBlockIoTuneInfo;
 struct _virDomainBlockIoTuneInfo {
@@ -1498,6 +1519,19 @@ struct _virDomainNVRAMDef {
     virDomainDeviceInfo info;
 };
 
+struct _virDomainIvshmemDef {
+    int use_server; /* enum virDomainIvshmemServer */
+    int role; /* virDomainIvshmemRole */
+    unsigned long long size;
+    char *file;
+    struct {
+        bool enabled;
+        unsigned vectors;
+        virDomainIoEventFd ioeventfd;
+    } msi;
+    virDomainDeviceInfo info;
+};
+
 typedef enum {
     VIR_DOMAIN_SMBIOS_NONE = 0,
     VIR_DOMAIN_SMBIOS_EMULATE,
@@ -1979,6 +2013,9 @@ struct _virDomainDef {
     size_t nseclabels;
     virSecurityLabelDefPtr *seclabels;
 
+    size_t nivshmems;
+    virDomainIvshmemDefPtr *ivshmems;
+
     /* Only 1 */
     virDomainWatchdogDefPtr watchdog;
     virDomainMemballoonDefPtr memballoon;
@@ -2177,6 +2214,7 @@ void virDomainHostdevDefFree(virDomainHostdevDefPtr def);
 void virDomainHubDefFree(virDomainHubDefPtr def);
 void virDomainRedirdevDefFree(virDomainRedirdevDefPtr def);
 void virDomainRedirFilterDefFree(virDomainRedirFilterDefPtr def);
+void virDomainIvshmemDefFree(virDomainIvshmemDefPtr def);
 void virDomainDeviceDefFree(virDomainDeviceDefPtr def);
 virDomainDeviceDefPtr virDomainDeviceDefCopy(virDomainDeviceDefPtr src,
                                              const virDomainDef *def,
@@ -2612,6 +2650,8 @@ VIR_ENUM_DECL(virDomainRNGModel)
 VIR_ENUM_DECL(virDomainRNGBackend)
 VIR_ENUM_DECL(virDomainTPMModel)
 VIR_ENUM_DECL(virDomainTPMBackend)
+VIR_ENUM_DECL(virDomainIvshmemServer)
+VIR_ENUM_DECL(virDomainIvshmemRole)
 /* from libvirt.h */
 VIR_ENUM_DECL(virDomainState)
 VIR_ENUM_DECL(virDomainNostateReason)

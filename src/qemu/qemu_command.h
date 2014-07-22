@@ -184,6 +184,10 @@ char * qemuBuildHubDevStr(virDomainDefPtr def,
 char * qemuBuildRedirdevDevStr(virDomainDefPtr def,
                                virDomainRedirdevDefPtr dev,
                                virQEMUCapsPtr qemuCaps);
+char * qemuBuildIvshmemDevStr(virDomainDefPtr def,
+                              virDomainIvshmemDefPtr dev,
+                              virQEMUCapsPtr qemuCaps);
+
 int qemuNetworkIfaceConnect(virDomainDefPtr def,
                             virConnectPtr conn,
                             virQEMUDriverPtr driver,

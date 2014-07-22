@@ -1040,6 +1040,10 @@ qemuAssignDeviceAliases(virDomainDefPtr def, virQEMUCapsPtr qemuCaps)
         if (virAsprintf(&def->hubs[i]->info.alias, "hub%zu", i) < 0)
             return -1;
     }
+    for (i = 0; i < def->nivshmems; i++) {
+        if (virAsprintf(&def->ivshmems[i]->info.alias, "ivshmem%zu", i) < 0)
+            return -1;
+    }
     for (i = 0; i < def->nsmartcards; i++) {
         if (virAsprintf(&def->smartcards[i]->info.alias, "smartcard%zu", i) < 0)
             return -1;
@@ -5019,6 +5023,53 @@ qemuBuildRedirdevDevStr(virDomainDefPtr def,
             goto error;
         }
         virBufferAsprintf(&buf, ",bootindex=%d", dev->info.bootIndex);
+    }
+
+    if (qemuBuildDeviceAddressStr(&buf, def, &dev->info, qemuCaps) < 0)
+        goto error;
+
+    if (virBufferCheckError(&buf) < 0)
+        goto error;
+
+    return virBufferContentAndReset(&buf);
+
+ error:
+    virBufferFreeAndReset(&buf);
+    return NULL;
+}
+
+char *
+qemuBuildIvshmemDevStr(virDomainDefPtr def,
+                       virDomainIvshmemDefPtr dev,
+                       virQEMUCapsPtr qemuCaps)
+{
+    virBuffer buf = VIR_BUFFER_INITIALIZER;
+
+    if (!virQEMUCapsGet(qemuCaps, QEMU_CAPS_DEVICE_IVSHMEM)) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("ivshmem device is not supported by QEMU"));
+        goto error;
+    }
+
+    virBufferAddLit(&buf, "ivshmem");
+    if (dev->size)
+        virBufferAsprintf(&buf, ",size=%llum", dev->size / (1024 * 1024));
+    if (dev->role)
+        virBufferAsprintf(&buf, ",role=%s",
+                          virDomainIvshmemRoleTypeToString(dev->role));
+
+    if (dev->use_server == VIR_DOMAIN_IVSHMEM_SERVER_DISABLED)
+        virBufferAsprintf(&buf, ",shm=%s", dev->file);
+    else {
+        virBufferAsprintf(&buf, ",chardev=char%s", dev->info.alias);
+        if (dev->msi.enabled) {
+            virBufferAddLit(&buf, ",msi=on");
+            if (dev->msi.vectors)
+                virBufferAsprintf(&buf, ",vectors=%u", dev->msi.vectors);
+            if (dev->msi.ioeventfd)
+                virBufferAsprintf(&buf, ",ioeventfd=%s",
+                                  virDomainIoEventFdTypeToString(dev->msi.ioeventfd));
+        }
     }
 
     if (qemuBuildDeviceAddressStr(&buf, def, &dev->info, qemuCaps) < 0)
@@ -9190,6 +9241,32 @@ qemuBuildCommandLine(virConnectPtr conn,
             virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
                            _("your QEMU is too old to support pvpanic"));
             goto error;
+        }
+    }
+
+    for (i = 0; i < def->nivshmems; i++) {
+        virDomainIvshmemDefPtr ivshmem = def->ivshmems[i];
+        char *devstr;
+
+        virCommandAddArg(cmd, "-device");
+        if (!(devstr = qemuBuildIvshmemDevStr(def, ivshmem, qemuCaps)))
+            goto error;
+        virCommandAddArg(cmd, devstr);
+        VIR_FREE(devstr);
+
+        if (ivshmem->use_server == VIR_DOMAIN_IVSHMEM_SERVER_ENABLED) {
+            virDomainChrSourceDef source;
+
+            source.type = VIR_DOMAIN_CHR_TYPE_UNIX;
+            source.data.nix.path = ivshmem->file;
+            source.data.nix.listen = false;
+
+            virCommandAddArg(cmd, "-chardev");
+            if (!(devstr = qemuBuildChrChardevStr(&source, ivshmem->info.alias,
+                                                  qemuCaps)))
+                goto error;
+            virCommandAddArg(cmd, devstr);
+            VIR_FREE(devstr);
         }
     }
 

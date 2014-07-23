@@ -1400,6 +1400,9 @@ mymain(void)
     DO_TEST("panic", QEMU_CAPS_DEVICE_PANIC,
             QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
 
+    DO_TEST("ivshmem", QEMU_CAPS_PCIDEVICE,
+            QEMU_CAPS_DEVICE, QEMU_CAPS_DEVICE_IVSHMEM);
+
     virObjectUnref(driver.config);
     virObjectUnref(driver.caps);
     virObjectUnref(driver.xmlopt);

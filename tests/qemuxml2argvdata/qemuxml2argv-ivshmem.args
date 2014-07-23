@@ -1,0 +1,10 @@
+LC_ALL=C PATH=/bin HOME=/home/test USER=test LOGNAME=test QEMU_AUDIO_DRV=none \
+/usr/bin/qemu -S \
+-M pc -m 214 -smp 1 -nographic -nodefaults \
+-monitor unix:/tmp/test-monitor,server,nowait -no-acpi -boot c -usb \
+-device virtio-balloon-pci,id=balloon0,bus=pci.0,addr=0x3 \
+-device ivshmem,chardev=charivshmem0,msi=on,vectors=32,ioeventfd=on \
+-chardev socket,id=charivshmem0,path=/tmp/socket-ivshmem0 \
+-device ivshmem,size=32m,role=master,chardev=charivshmem1,msi=on,vectors=32 \
+-chardev socket,id=charivshmem1,path=/tmp/socket-ivshmem1 \
+-device ivshmem,size=32m,role=peer,shm=ivshmem2,bus=pci.0,addr=0x8
